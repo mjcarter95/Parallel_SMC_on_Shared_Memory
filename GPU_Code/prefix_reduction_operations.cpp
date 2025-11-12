@@ -1,6 +1,7 @@
 #include "prefix_reduction_operations.h"
 #include <omp.h>
 #include <cstddef>
+#include <stdio.h>
 
 // -----------------------------------------------------------------------------
 // Internal templated in-place inclusive scan used by both int and double variants.
@@ -106,4 +107,86 @@ void prefix_dot_product_inplace_device(const int* a1, const int* a2,
 
     // Step B: in-place inclusive prefix sum on 'out'
     prefix_sum_int_inplace_device(out, n, tile);
+}
+
+
+// Returns true if csumM is an inclusive prefix sum of M.
+// M and csumM must be device pointers (omp_target_alloc).
+bool d_validate_csumM_inclusive(const int* M,
+                                       const int* csumM,
+                                       int loc_n,
+                                       int device)
+{
+    if (loc_n <= 0) return true;
+
+    const int dev = omp_get_default_device();
+
+    // Scalars come back to host via map(from:).
+    int err = 0;
+    int bad_i = -1;
+    long long expected = 0;   // use wide type for safety
+    long long got = 0;
+
+    #pragma omp target is_device_ptr(M, csumM) \
+                       map(from: err, bad_i, expected, got) \
+                       firstprivate(loc_n)
+    {
+        long long acc = 0;
+        err = 0;
+        bad_i = -1;
+        expected = 0;
+        got = 0;
+
+        for (int i = 0; i < loc_n; ++i) {
+            acc += (long long)M[i];
+            // Compare in 64-bit to avoid overflow surprises.
+            if ((long long)csumM[i] != acc) {
+                err = 1;
+                bad_i = i;
+                expected = acc;
+                got = (long long)csumM[i];
+                break; // stop at first mismatch
+            }
+        }
+    }
+
+    if (err) {
+        // Optional: also fetch a few neighbor values around the mismatch
+        // for extra debugging context (safe even if we skip it).
+        int prev = (bad_i > 0) ? 0 : -1;
+        if (bad_i > 0) {
+            omp_target_memcpy(&prev, csumM + (bad_i - 1), sizeof(int),
+                              0, 0, omp_get_initial_device(), dev);
+        }
+
+        int Mi = 0, csum_i = 0;
+        omp_target_memcpy(&Mi,     M + bad_i,      sizeof(int), 0, 0, omp_get_initial_device(), dev);
+        omp_target_memcpy(&csum_i, csumM + bad_i,  sizeof(int), 0, 0, omp_get_initial_device(), dev);
+
+        printf("[CSUMM-VALIDATE] FAILED at i=%d: "
+               "prev_csum=%d, M[i]=%d, csumM[i]=%d, "
+               "expected(in 64-bit)=%lld, got=%lld\n",
+               bad_i, prev, Mi, csum_i, expected, got);
+        return false;
+    }
+
+    // Optional total consistency check: last equals sum(M)
+    int last = 0;
+    omp_target_memcpy(&last, csumM + (loc_n - 1), sizeof(int),
+                      0, 0, omp_get_initial_device(), dev);
+
+    long long total = 0;
+    #pragma omp target teams distribute parallel for reduction(+:total) \
+                         is_device_ptr(M) firstprivate(loc_n)
+    for (int i = 0; i < loc_n; ++i) total += (long long)M[i];
+
+    if ((long long)last != total) {
+        printf("[CSUMM-VALIDATE] FAILED total: last=%d, sum(M)=%lld\n",
+               last, total);
+        return false;
+    }
+
+    // All good
+    // printf("[CSUMM-VALIDATE] OK: last=%d, sum(M)=%lld\n", last, total);
+    return true;
 }

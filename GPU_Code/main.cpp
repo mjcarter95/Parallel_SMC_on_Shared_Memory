@@ -85,6 +85,12 @@ int main(int argc, char** argv) {
     for (double p : red_pct) avg_red += p;
     if (num_MC_runs > 0) avg_red /= (double)num_MC_runs;
 
+    if (redistribution == 0)
+        printf("Naive parallel redistribution results:\n");
+    else if (redistribution == 1)
+        printf("Optimal parallel redistribution results:\n");
+    else 
+        printf("Sequential redistribution results:\n");
     printf("\nMedian time over %d run(s): %.6f s\n", num_MC_runs, med_time);
     printf("Average redistribution share: %.2f%%\n", 100.0 * avg_red);
 

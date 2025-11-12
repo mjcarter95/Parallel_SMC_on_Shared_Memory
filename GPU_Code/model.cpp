@@ -1,6 +1,7 @@
 #include "model.h"
 #include <omp.h>
 #include <cmath>
+#include <stdio.h>
 #include <algorithm>
 #include "prefix_reduction_operations.h"
 #include "random.h"  // rng_uniform01, rng_uniform_int
@@ -59,8 +60,7 @@ void sampling_from_q0(int*& X, int& x_len,
     const int dev = omp_get_default_device();
 
     // 1) Draw M[i] from the prior on device
-    #pragma omp target teams distribute parallel for \
-        is_device_ptr(M, rng_s0, rng_s1)
+    #pragma omp target teams distribute parallel for is_device_ptr(M, rng_s0, rng_s1)
     for (int i = 0; i < loc_n; ++i) {
         const double u = rng_uniform01(rng_s0[i], rng_s1[i]);
         if (u < prior_threshold) {
@@ -81,14 +81,14 @@ void sampling_from_q0(int*& X, int& x_len,
     X = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)total, dev));
     x_len = total;
 
-    #pragma omp target teams distribute parallel for \
-        is_device_ptr(X, M, csumM, rng_s0, rng_s1)
+    // fill X with random bits (no nested parallel!)
+    #pragma omp target teams distribute parallel for is_device_ptr(X, M, csumM, rng_s0, rng_s1)
     for (int i = 0; i < loc_n; ++i) {
-        const int Mi   = M[i];
-        const int base = (i == 0) ? 0 : csumM[i - 1];
-        #pragma omp parallel for
-        for (int j = 0; j < Mi; ++j) {
-            X[base + j] = (rng_uniform01(rng_s0[i], rng_s1[i]) > 0.5) ? 1 : 0;
+        const int base = (i == 0) ? 0 : csumM[i - 1]; // To be checked
+        for (int j = 0; j < M[i]; ++j) {
+            // Consume the per-i RNG state repeatedly (OK; it advances each time)
+            const int bit = (rng_uniform01(rng_s0[i], rng_s1[i]) > 0.5) ? 1 : 0;
+            X[base + j] = bit;
         }
     }
 
@@ -133,8 +133,7 @@ void sampling_from_q(int*& X, int& x_len,
     for (int i = 0; i < loc_n; ++i) csumM_old[i] = csumM[i];
 
     // Draw r and compute new sizes
-    #pragma omp target teams distribute parallel for \
-        is_device_ptr(M, M_old, rng_s0, rng_s1)
+    #pragma omp target teams distribute parallel for is_device_ptr(M, M_old, rng_s0, rng_s1)
     for (int i = 0; i < loc_n; ++i) {
         const double r = rng_uniform01(rng_s0[i], rng_s1[i]);
         const int Mi_old = M_old[i];
@@ -146,18 +145,19 @@ void sampling_from_q(int*& X, int& x_len,
             M[i] = Mi_old;
         }
     }
-
+    
     // Build new csumM and get new total length
     #pragma omp target teams distribute parallel for is_device_ptr(csumM, M)
     for (int i = 0; i < loc_n; ++i) csumM[i] = M[i];
     prefix_sum_int_inplace_device(csumM, loc_n);
     const int new_total = device_read_last_int(csumM, loc_n);
 
+    
     // Allocate temp_x and fill new samples
     int* temp_x = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)new_total, dev));
 
-    #pragma omp target teams distribute parallel for \
-        is_device_ptr(X, temp_x, M, M_old, csumM_old, csumM, rng_s0, rng_s1)
+    
+    #pragma omp target teams distribute parallel for is_device_ptr(X, temp_x, M, M_old, csumM_old, csumM, rng_s0, rng_s1)
     for (int i = 0; i < loc_n; ++i) {
         const int Mi_old   = M_old[i];
         const int Mi_new   = M[i];
@@ -168,7 +168,7 @@ void sampling_from_q(int*& X, int& x_len,
 
         if (r2 <= cum_probs[0]) {
             // grow
-            #pragma omp parallel for
+            //#pragma omp parallel for
             for (int j = 0; j < Mi_old; ++j) temp_x[new_base + j] = X[old_base + j];
             const int bit = (rng_uniform01(rng_s0[i], rng_s1[i]) > 0.5) ? 1 : 0;
             temp_x[new_base + Mi_old] = bit;
@@ -176,12 +176,12 @@ void sampling_from_q(int*& X, int& x_len,
         } else if (r2 < cum_probs[1]) {
             // shrink
             const int copy_len = (Mi_old > 1) ? (Mi_old - 1) : Mi_old;
-            #pragma omp parallel for
+            //#pragma omp parallel for
             for (int j = 0; j < copy_len; ++j) temp_x[new_base + j] = X[old_base + j];
 
         } else {
             // flip
-            #pragma omp parallel for
+            //#pragma omp parallel for
             for (int j = 0; j < Mi_old; ++j) temp_x[new_base + j] = X[old_base + j];
             if (Mi_old > 0) {
                 const int jflip = rng_uniform_int(rng_s0[i], rng_s1[i], 0, Mi_old - 1);
@@ -200,8 +200,16 @@ void sampling_from_q(int*& X, int& x_len,
     X = newX;
     x_len = new_total;
 
+
+
+    //#pragma omp target teams distribute parallel for is_device_ptr(M_old, M)
+    //for (int i = 0; i < loc_n; ++i) M[i] = M_old[i];
+
+    //#pragma omp target teams distribute parallel for is_device_ptr(csumM_old, csumM)
+    //for (int i = 0; i < loc_n; ++i) csumM[i] = csumM_old[i];
+
     // Free temporaries
-    omp_target_free(temp_x,    dev);
+    omp_target_free(temp_x,    dev); 
     omp_target_free(M_old,     dev);
     omp_target_free(csumM_old, dev);
 }

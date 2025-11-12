@@ -3,15 +3,16 @@
 
 #include <cstddef>
 
-// Device-visible model constants (defined in model.cpp)
-extern double prior_threshold;     // p("small")
-extern int    min_dim_range[2];    // inclusive
-extern int    max_dim_range[2];    // inclusive
-extern double cum_probs[3];        // {p_grow, p_grow+p_shrink, 1.0}
+#pragma omp declare target
+extern double prior_threshold;
+extern int    min_dim_range[2];
+extern int    max_dim_range[2];
+extern double cum_probs[3];
 
-// Size-only log-prob helpers (device-usable)
+// device-callable helpers if used inside target regions elsewhere:
 double intervals_lpmf_M(int M);
 double q_by_sizes(int M, int initM);
+#pragma omp end declare target
 
 // Build initial population on the GPU (packed storage).
 // NOTE: logw is NO LONGER an argument here; it will be set in `initialise`.

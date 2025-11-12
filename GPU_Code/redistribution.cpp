@@ -3,6 +3,7 @@
 #include <omp.h>
 #include <cstddef>
 #include <algorithm>
+#include <stdio.h>
 
 static inline int device_read_last_int(const int* d_arr, int len) {
     int out = 0;
@@ -29,17 +30,16 @@ void pad(int*& X, int& x_len,
     const std::size_t padded_len = (std::size_t)loc_n * (std::size_t)maxM;
     int* newX = static_cast<int*>(omp_target_alloc(sizeof(int) * padded_len, dev));
 
-    #pragma omp target teams distribute parallel for \
-        is_device_ptr(newX, X, M, csumM) firstprivate(maxM)
+    #pragma omp target teams distribute parallel for is_device_ptr(newX, X, M, csumM) firstprivate(maxM)
     for (int i = 0; i < loc_n; ++i) {
         const int Mi  = M[i];
         const int src = (i == 0) ? 0 : csumM[i - 1];
         const int dst = i * maxM;
 
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int j = 0; j < Mi; ++j) newX[dst + j] = X[src + j];
 
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int j = Mi; j < maxM; ++j) newX[dst + j] = -1;
     }
 
@@ -50,9 +50,7 @@ void pad(int*& X, int& x_len,
     omp_target_free(d_maxM, dev);
 }
 
-void fixed_size_redistribution(int* X, int* M,
-                               const int* ncopies,
-                               int loc_n, int maxM) {
+void fixed_size_redistribution(int* X, const int* ncopies, int loc_n, int maxM) {
     if (loc_n <= 0 || maxM <= 0) return;
 
     const int dev = omp_get_default_device();
@@ -63,15 +61,13 @@ void fixed_size_redistribution(int* X, int* M,
     prefix_sum_int_inplace_device(d_csum, loc_n);
 
     int* X_tmp = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)loc_n * (size_t)maxM, dev));
-    int* M_tmp = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)loc_n, dev));
 
-    const int teams = std::min(loc_n, 256);
+    const int teams = std::min(loc_n, 2048);
 
-    #pragma omp target teams num_teams(teams) thread_limit(256) \
-        is_device_ptr(X, X_tmp, M, M_tmp, ncopies, d_csum) \
-        firstprivate(loc_n, teams, maxM)
+    #pragma omp target teams num_teams(teams) is_device_ptr(X, X_tmp, ncopies, d_csum) firstprivate(loc_n, teams, maxM)
     {
         const int id        = omp_get_team_num();
+
         const int start_out = (id * loc_n) / teams;
         const int end_out   = ((id + 1) * loc_n) / teams;
         const int chunk     = end_out - start_out;
@@ -92,9 +88,8 @@ void fixed_size_redistribution(int* X, int* M,
                 const int src_base = src_idx * maxM;
                 const int dst_base = dst_idx * maxM;
 
-                #pragma omp parallel for
+                //#pragma omp parallel for
                 for (int j = 0; j < maxM; ++j) X_tmp[dst_base + j] = X[src_base + j];
-                M_tmp[dst_idx] = M[src_idx];
             };
 
             int count = 0;
@@ -115,16 +110,12 @@ void fixed_size_redistribution(int* X, int* M,
     #pragma omp target teams distribute parallel for is_device_ptr(X, X_tmp) firstprivate(maxM)
     for (int idx = 0; idx < loc_n; ++idx) {
         const int base = idx * maxM;
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int j = 0; j < maxM; ++j) X[base + j] = X_tmp[base + j];
     }
 
-    #pragma omp target teams distribute parallel for is_device_ptr(M, M_tmp)
-    for (int i = 0; i < loc_n; ++i) M[i] = M_tmp[i];
-
     omp_target_free(d_csum, omp_get_default_device());
     omp_target_free(X_tmp,  omp_get_default_device());
-    omp_target_free(M_tmp,  omp_get_default_device());
 }
 
 void restore(int*& X, int& x_len,
@@ -142,13 +133,12 @@ void restore(int*& X, int& x_len,
 
     int* newX = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)total, dev));
 
-    #pragma omp target teams distribute parallel for \
-        is_device_ptr(newX, X, M, csumM) firstprivate(maxM)
+    #pragma omp target teams distribute parallel for is_device_ptr(newX, X, M, csumM) firstprivate(maxM)
     for (int i = 0; i < loc_n; ++i) {
         const int Mi  = M[i];
         const int src = i * maxM;
         const int dst = (i == 0) ? 0 : csumM[i-1];
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int j = 0; j < Mi; ++j) newX[dst + j] = X[src + j];
     }
 
@@ -164,7 +154,14 @@ void naive_variable_size_redistribution(int*& X, int& x_len,
     if (loc_n <= 0) return;
     int maxM = 0;
     pad(X, x_len, M, csumM, loc_n, maxM);
-    fixed_size_redistribution(X, M, ncopies, loc_n, maxM);
+    //printf("MaxM during naive redistribution: %d\n", maxM);
+    fixed_size_redistribution(X, ncopies, loc_n, maxM);
+    fixed_size_redistribution(/*X=*/M, ncopies, loc_n, /*maxM=*/1);
+
+    #pragma omp target teams distribute parallel for is_device_ptr(csumM, M)
+    for (int i = 0; i < loc_n; ++i) csumM[i] = M[i];
+    prefix_sum_int_inplace_device(csumM, loc_n);
+    
     restore(X, x_len, M, csumM, loc_n, maxM);
 }
 
@@ -184,14 +181,22 @@ void optimal_variable_size_redistribution(int*& X, int& x_len,
     prefix_dot_product_inplace_device(ncopies, M, cdot, loc_n);
     const int total_workload = device_read_last_int(cdot, loc_n);
 
+    /*printf("Total workload: %d\n", total_workload);
+
+    int* d_maxM = static_cast<int*>(omp_target_alloc(sizeof(int), dev));
+    d_max_int(M, loc_n, d_maxM);
+    int maxM = 0;
+    omp_target_memcpy(&maxM, d_maxM, sizeof(int), 0, 0,
+                      omp_get_initial_device(), dev);
+    printf("MaxM during optimal redistribution: %d\n", maxM);
+    omp_target_free(d_maxM, dev);*/
     // 2) Copy X directly into new packed buffer using linear k
     int* newX = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)total_workload, dev));
 
-    const int teams = std::min(std::max(1, total_workload), 256);
+    //const int teams = std::min(std::max(1, total_workload), 2048);
+    const int teams = std::min(loc_n, 2048);
 
-    #pragma omp target teams num_teams(teams) thread_limit(256) \
-        is_device_ptr(X, newX, M, csumM, ncopies, cdot) \
-        firstprivate(loc_n, total_workload)
+    #pragma omp target teams num_teams(teams) is_device_ptr(X, newX, M, csumM, ncopies, cdot) firstprivate(loc_n, total_workload)
     {
         const int id  = omp_get_team_num();
 
@@ -230,12 +235,12 @@ void optimal_variable_size_redistribution(int*& X, int& x_len,
     x_len = total_workload;
 
     // 3) Redistribute M via fixed-size trick with maxM=1
-    int* fakeM = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)loc_n, dev));
-    #pragma omp target teams distribute parallel for is_device_ptr(fakeM)
-    for (int i = 0; i < loc_n; ++i) fakeM[i] = 1;
+    //int* fakeM = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)loc_n, dev));
+    //#pragma omp target teams distribute parallel for is_device_ptr(fakeM)
+    //for (int i = 0; i < loc_n; ++i) fakeM[i] = 1;
 
-    fixed_size_redistribution(/*X=*/M, /*M=*/fakeM, ncopies, loc_n, /*maxM=*/1);
-    omp_target_free(fakeM, dev);
+    fixed_size_redistribution(/*X=*/M, ncopies, loc_n, /*maxM=*/1);
+    //omp_target_free(fakeM, dev);
 
     // 4) Recompute csumM from new M
     #pragma omp target teams distribute parallel for is_device_ptr(csumM, M)
@@ -246,3 +251,74 @@ void optimal_variable_size_redistribution(int*& X, int& x_len,
     omp_target_free(cdot, dev);
 }
 
+
+void sequential_redistribution(int*& X, int& x_len,
+                                        int* M, int* csumM,
+                                        const int* ncopies,
+                                        int loc_n) {
+
+    if (loc_n <= 0) return;
+
+    const int dev = omp_get_default_device();
+
+    // 1) cdot = prefix_sum(ncopies[i] * M[i])
+    int* cdot = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)loc_n, dev));
+    prefix_dot_product_inplace_device(ncopies, M, cdot, loc_n);
+    const int total_workload = device_read_last_int(cdot, loc_n);
+
+    // 2) Copy X directly into new packed buffer using linear k
+    int* temp_X = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)total_workload, dev));
+    int* fakeM = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)loc_n, dev));
+
+    printf("Total workload: %d\n", total_workload);
+    
+    #pragma omp target is_device_ptr(temp_X, X, ncopies) device(dev)
+    {
+        int i = 0;
+        for (int j = 0; j < loc_n; ++j) {
+            for (int k = 0; k < ncopies[j]; ++k) {
+                for (int l = 0; l < M[j]; ++l) {
+                    temp_X[i] = X[(j == 0 ? 0 : csumM[j - 1]) + l];
+                    i++;
+                }
+            }
+        }
+    }
+
+    #pragma omp target is_device_ptr(fakeM, M, ncopies) device(dev)
+    {
+        int i = 0;
+        for (int j = 0; j < loc_n; ++j) {
+            for (int k = 0; k < ncopies[j]; ++k) {
+                fakeM[i] = M[j]; 
+                ++i;
+            }
+        }
+    }
+
+    // Replace X with temp_x
+    int* newX = static_cast<int*>(omp_target_alloc(sizeof(int) * (size_t)total_workload, dev));
+    #pragma omp target teams distribute parallel for is_device_ptr(newX, temp_X)
+    for (int k = 0; k < total_workload; ++k) newX[k] = temp_X[k];
+
+    if (X) omp_target_free(X, dev);
+    X = newX;
+    x_len = total_workload;
+
+    // Replace M with fakeM
+    #pragma omp target teams distribute parallel for is_device_ptr(M, fakeM)
+    for (int k = 0; k < loc_n; ++k) M[k] = fakeM[k];
+
+    // 4) Recompute csumM from new M
+    #pragma omp target teams distribute parallel for is_device_ptr(csumM, M)
+    for (int i = 0; i < loc_n; ++i) csumM[i] = M[i];
+    prefix_sum_int_inplace_device(csumM, loc_n);
+
+    // 5) Free temporaries
+    omp_target_free(cdot, dev);
+    omp_target_free(temp_X, dev);
+    omp_target_free(fakeM, dev);
+
+    return;
+
+}

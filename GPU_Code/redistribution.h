@@ -16,9 +16,7 @@ void pad(int*& X, int& x_len,
          int loc_n,
          int& maxM);
 
-void fixed_size_redistribution(int* X, int* M,
-                               const int* ncopies,
-                               int loc_n, int maxM);
+void fixed_size_redistribution(int* X, const int* ncopies, int loc_n, int maxM);
 
 void restore(int*& X, int& x_len,
              const int* M, int* csumM,
@@ -35,6 +33,11 @@ void optimal_variable_size_redistribution(int*& X, int& x_len,
                                           int* M, int* csumM,
                                           const int* ncopies,
                                           int loc_n);
+
+void sequential_redistribution(int*& X, int& x_len,
+                                        int* M, int* csumM,
+                                        const int* ncopies,
+                                        int loc_n);
 
 #endif // REDISTRIBUTION_H
 

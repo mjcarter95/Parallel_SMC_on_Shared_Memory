@@ -5,6 +5,7 @@
 
 #include <omp.h>
 #include <cmath>
+#include <stdio.h>
 
 // Build ncopies on device using the standard "systematic-like" formula on logw.
 static void d_choice_from_logw(const double* logw,
@@ -89,6 +90,23 @@ void resampling(int*& X, int& x_len,
     // Build ncopies from logw on device
     d_choice_from_logw(logw, ncopies, loc_n, rng_s0, rng_s1);
 
+    // --- Check if the total number of copies is equal to loc_n ---
+    /*int ncopies_sum = 0;
+    #pragma omp target teams distribute parallel for reduction(+:ncopies_sum) map(to: ncopies[0:loc_n]) firstprivate(loc_n)
+    for (int i = 0; i < loc_n; i++) ncopies_sum += ncopies[i];
+
+    if (ncopies_sum != loc_n) {
+        printf("[FATAL] Sum(ncopies) = %d, expected %d\n", ncopies_sum, loc_n);
+        fflush(stdout);
+        exit(EXIT_FAILURE);
+    }
+    else {
+        printf("[INFO] Sum(ncopies) OK: %d\n", ncopies_sum);
+        fflush(stdout);
+    }*/
+    // ----------------------------
+
+
     // Time redistribution (optional)
     double t0 = 0.0, t1 = 0.0;
     if (time_sec) t0 = omp_get_wtime();
@@ -96,9 +114,13 @@ void resampling(int*& X, int& x_len,
     if (redistribution == 0) {
         // Naive: pad → fixed → restore (reallocates X and updates M, csumM)
         naive_variable_size_redistribution(X, x_len, M, csumM, ncopies, loc_n);
-    } else {
+    } else if (redistribution == 1)  {
         // Optimal: cdot + binary search (reallocates X and updates M, csumM)
         optimal_variable_size_redistribution(X, x_len, M, csumM, ncopies, loc_n);
+    }
+
+    else {
+        sequential_redistribution(X, x_len, M, csumM, ncopies, loc_n);
     }
 
     if (time_sec) { t1 = omp_get_wtime(); *time_sec += (t1 - t0); }

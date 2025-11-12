@@ -19,4 +19,9 @@ void prefix_sum_double_inplace_device(double* data, int n, int tile = 1024);
 void prefix_dot_product_inplace_device(const int* a1, const int* a2,
                                        int* out, int n, int tile = 1024);
 
+bool d_validate_csumM_inclusive(const int* M,
+                                       const int* csumM,
+                                       int loc_n,
+                                       int device);
+
 #endif // PREFIX_REDUCTION_OPERATIONS_H

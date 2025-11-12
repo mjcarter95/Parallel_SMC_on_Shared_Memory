@@ -3,7 +3,7 @@
 #include <omp.h>
 #include <cmath>
 #include <cstddef>
-
+#include <stdio.h>
 // Project headers (GPU implementations)
 #include "importance_sampling.h"
 #include "resampling.h"
@@ -91,27 +91,14 @@ double smc_sampler(int N,
 
         // Resample if ESS < N (same logic as your CPU driver)
         if (neff < Nt) {
-            resampling(/*X*/ X, /*x_len*/ x_len,
-                       /*M*/ M, /*csumM*/ csumM,
-                       /*logw*/ logw,
-                       /*loc_n*/ N,
-                       /*redistribution*/ redistribution,
-                       /*rng_s0*/ rng_s0, /*rng_s1*/ rng_s1,
-                       /*time_sec*/ &time_resampling);
+            resampling( X,  x_len, M, csumM, logw, N, redistribution, rng_s0, rng_s1, &time_resampling);
         }
 
         // One step of the proposal / IS weight update (device)
-        importance_sampling(/*X*/ X, /*x_len*/ x_len,
-                            /*M*/ M, /*csumM*/ csumM,
-                            /*initM*/ initM,
-                            /*initX*/ initX, /*init_x_len*/ init_x_len,
-                            /*initcsumM*/ initcsumM,
-                            /*logw*/ logw,
-                            /*loc_n*/ N,
-                            /*rng_s0*/ rng_s0, /*rng_s1*/ rng_s1);
+        importance_sampling(X, x_len, M, csumM, initM, initX, init_x_len, initcsumM, logw, N, rng_s0, rng_s1);
 
         // (Optional) progress
-        // printf("Iteration %d\n", k);
+        printf("Iteration %d\n", k);
     }
     const double loop_t1 = omp_get_wtime();
 
@@ -119,6 +106,8 @@ double smc_sampler(int N,
     if (red_percentage && *time_total > 0.0) {
         *red_percentage = time_resampling / *time_total;
     }
+
+    return 0.0;
 
     // ----------------------------
     // Final estimate
