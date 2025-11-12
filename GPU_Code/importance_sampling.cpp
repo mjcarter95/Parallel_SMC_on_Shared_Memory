@@ -17,6 +17,7 @@ void initialise(int*& X, int& x_len,
                 unsigned long long* rng_s1,
                 unsigned long long seed)
 {
+    
     // Seed per-particle RNG states on the device
     rng_seed_all(rng_s0, rng_s1, loc_n, seed);
 
@@ -28,6 +29,7 @@ void initialise(int*& X, int& x_len,
                      initcsumM,
                      loc_n,
                      rng_s0, rng_s1);
+
 
     // Compute initial logw on device:
     // logw[i] = intervals_lpmf_M(M[i]) - intervals_lpmf_M(M[i])  (typically 0)
