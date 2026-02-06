@@ -2,8 +2,6 @@ The algorithmic details of the code in this repository is found in the following
 
 Varsi, A., Drousiotis, E., Spirakis, P.G., Maskell, S. (2026). A Shared Memory Optimal Parallel Redistribution Algorithm for SMC Samplers with Variable Size Samples. In: Zhang, Y., Hladik, M., Moosaei, H. (eds) Learning and Intelligent Optimization. LION 2025. Lecture Notes in Computer Science, vol 15745. Springer, Cham. https://doi.org/10.1007/978-3-032-09192-5_7.
 
-which can be found at the following link: https://openreview.net/forum?id=S3R0uG8Dta
-
 Please cite it using the following bibitem: 
 
 @InProceedings{10.1007/978-3-032-09192-5_7,
