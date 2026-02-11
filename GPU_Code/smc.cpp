@@ -104,7 +104,7 @@ double smc_sampler(int N,
 
     if (time_total) *time_total = (loop_t1 - loop_t0);
     if (red_percentage && *time_total > 0.0) {
-        *red_percentage = time_resampling / *time_total;
+        *red_percentage = time_resampling;
     }
 
     return 0.0;

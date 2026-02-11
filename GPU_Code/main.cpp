@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
     else 
         printf("Sequential redistribution results:\n");
     printf("\nMedian time over %d run(s): %.6f s\n", num_MC_runs, med_time);
-    printf("Average redistribution share: %.2f%%\n", 100.0 * avg_red);
+    printf("Median redistribution time over %d run(s): %.6f s\n", num_MC_runs, avg_red);
 
     return 0;
 }
